@@ -76,7 +76,7 @@ module! {
 struct E1000Driver;
 
 impl E1000Driver {
-    fn handle_rx_irq(dev: &net::Device, napi: &Napi, data: &NetData) {  
+    fn handle_rx_irq(dev: &net::Device, napi: &Napi, data: &NetData) {
         // Exercise4 Checkpoint 1
     }
 
@@ -231,12 +231,26 @@ impl net::DeviceOperations for E1000Driver {
             *dev_e1k = Some(e1000_device);
         }
 
-
         // Exercise3 Checkpoint 5
         // Enable interrupts
         // step1 set up irq_data
         // step2 request_irq
         // step3 set up irq_handler
+        let intrdata = Box::try_new(IrqData {
+            dev_e1000: data.dev_e1000.clone(),
+            res: data.res.clone(),
+            napi: data.napi.clone(),
+        })
+        .unwrap();
+
+        let irq = irq::Registration::try_new(data.irq, intrdata, irq::flags::SHARED, fmt!("e1000"))
+            .unwrap();
+        data.irq_handler.store(Box::into_raw(Box::try_new(irq).unwrap()), Ordering::Relaxed);
+
+        // 自定义kernel函数打印hello
+        unsafe{
+            bindings::a_test_say_hello(0);
+        }
 
 
         // Enable NAPI scheduling
@@ -276,6 +290,7 @@ impl net::DeviceOperations for E1000Driver {
     ) -> NetdevTx {
         pr_info!("start xmit\n");
         // Exercise4 Checkpoint 2
+        NetdevTx::Ok
     }
 
     /// Corresponds to `ndo_get_stats64` in `struct net_device_ops`.
@@ -387,6 +402,9 @@ struct RustE1000dev {
 impl kernel::Module for RustE1000dev {
     fn init(name: &'static CStr, module: &'static ThisModule) -> Result<Self> {
         pr_info!("Rust e1000 device driver (init)\n");
+        unsafe{
+            bindings::a_test_say_hello(123);
+        }
 
         let dev = driver::Registration::<pci::Adapter<E1000Driver>>::new_pinned(name, module)?;
         Ok(RustE1000dev { dev })

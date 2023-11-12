@@ -1,2 +1,14 @@
 /target
 /Cargo.lock
+
+.*
+*.ko
+*.mod
+*.mod.c
+*.o
+*.rmeta
+*.d
+Module.symvers
+modules.order
+rust-project.json
+
