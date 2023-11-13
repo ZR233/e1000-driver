@@ -81,33 +81,32 @@ impl E1000Driver {
         // Exercise4 Checkpoint 1
         let mut dev_e1k = data.dev_e1000.lock_irqdisable();
         let e1k_fn = dev_e1k.as_mut().unwrap();
-        let mut batch = e1k_fn.e1000_recv();
+        let mut batch: Option<Vec<Vec<u8>>> = e1k_fn.e1000_recv();
 
-        match batch {
-            Some(batch) => {
-                for pkg in batch.as_slice() {
-                    let mut skb = dev.alloc_skb_ip_align(RXBUFFER).unwrap();
-                    let head: &[u8] = skb.head_data();
-                    let head = unsafe {
-                        let len = head.len();
-                        let ptr = head.as_ptr() as *mut u8;
-                        &mut *slice_from_raw_parts_mut(ptr, len)
-                    };
+        if let Some(batch) = batch {
+            for pkg in batch.as_slice() {
+                let mut skb = dev.alloc_skb_ip_align(RXBUFFER).unwrap();
+                let head: &[u8] = skb.head_data();
+                let head = unsafe {
+                    let len = head.len();
+                    let ptr = head.as_ptr() as *mut u8;
+                    &mut *slice_from_raw_parts_mut(ptr, len)
+                };
 
-                    head.copy_from_slice(pkg.as_slice()); 
-                    let length = pkg.len()-4;
+                head.copy_from_slice(pkg.as_slice());
+                let length = pkg.len() - 4;
 
-                    skb.put(length as u32);
-                    let protocol = skb.eth_type_trans(&napi.dev_get());
-                    skb.protocol_set(protocol);
-                    napi.gro_receive(&skb);
+                skb.put(length as u32);
+                let protocol = skb.eth_type_trans(&napi.dev_get());
+                skb.protocol_set(protocol);
+                napi.gro_receive(&skb);
 
-                    data.stats.rx_bytes.fetch_add(length as _, Ordering::Relaxed);
-                 
-                    data.stats.rx_packets.fetch_add(1, Ordering::Relaxed);
-                }
+                data.stats
+                    .rx_bytes
+                    .fetch_add(length as _, Ordering::Relaxed);
+
+                data.stats.rx_packets.fetch_add(1, Ordering::Relaxed);
             }
-            None => pr_warn!("rx no data"),
         }
     }
 
