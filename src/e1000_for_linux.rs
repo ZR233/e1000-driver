@@ -1,6 +1,7 @@
 //! Rust e1000 network device.
 #![allow(unused)]
 
+use core::ptr::slice_from_raw_parts_mut;
 use core::slice::from_raw_parts_mut;
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use kernel::prelude::*;
@@ -78,6 +79,36 @@ struct E1000Driver;
 impl E1000Driver {
     fn handle_rx_irq(dev: &net::Device, napi: &Napi, data: &NetData) {
         // Exercise4 Checkpoint 1
+        let mut dev_e1k = data.dev_e1000.lock_irqdisable();
+        let e1k_fn = dev_e1k.as_mut().unwrap();
+        let mut batch = e1k_fn.e1000_recv();
+
+        match batch {
+            Some(batch) => {
+                for pkg in batch.as_slice() {
+                    let mut skb = dev.alloc_skb_ip_align(RXBUFFER).unwrap();
+                    let head: &[u8] = skb.head_data();
+                    let head = unsafe {
+                        let len = head.len();
+                        let ptr = head.as_ptr() as *mut u8;
+                        &mut *slice_from_raw_parts_mut(ptr, len)
+                    };
+
+                    head.copy_from_slice(pkg.as_slice()); 
+                    let length = pkg.len()-4;
+
+                    skb.put(length as u32);
+                    let protocol = skb.eth_type_trans(&napi.dev_get());
+                    skb.protocol_set(protocol);
+                    napi.gro_receive(&skb);
+
+                    data.stats.rx_bytes.fetch_add(length as _, Ordering::Relaxed);
+                 
+                    data.stats.rx_packets.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            None => pr_warn!("rx no data"),
+        }
     }
 
     fn handle_tx_irq() {
@@ -101,7 +132,8 @@ impl irq::Handler for E1000Driver {
             dev_e1k.as_mut().unwrap().e1000_intr()
         }; */
         let intr = unsafe {
-            let ptr = data.res.ptr.wrapping_add(0xc0); // ICR
+            let res = data.res.as_arc_borrow();
+            let ptr = res.ptr.wrapping_add(0xc0); // ICR
             bindings::readl(ptr as _)
         };
 
@@ -245,13 +277,13 @@ impl net::DeviceOperations for E1000Driver {
 
         let irq = irq::Registration::try_new(data.irq, intrdata, irq::flags::SHARED, fmt!("e1000"))
             .unwrap();
-        data.irq_handler.store(Box::into_raw(Box::try_new(irq).unwrap()), Ordering::Relaxed);
+        data.irq_handler
+            .store(Box::into_raw(Box::try_new(irq).unwrap()), Ordering::Relaxed);
 
         // 自定义kernel函数打印hello
-        unsafe{
+        unsafe {
             bindings::a_test_say_hello(0);
         }
-
 
         // Enable NAPI scheduling
         data.napi.enable();
@@ -290,6 +322,7 @@ impl net::DeviceOperations for E1000Driver {
     ) -> NetdevTx {
         pr_info!("start xmit\n");
         // Exercise4 Checkpoint 2
+
         NetdevTx::Ok
     }
 
@@ -350,7 +383,8 @@ impl pci::Driver for E1000Driver {
         dma::set_mask(pci_dev, 0xffffffff)?;
         dma::set_coherent_mask(pci_dev, 0xffffffff)?;
 
-        let mut regist = net::Registration::<E1000Driver>::try_new(pci_dev)?;
+        let mut regist: net::Registration<E1000Driver> =
+            net::Registration::<E1000Driver>::try_new(pci_dev)?;
         let net_dev = regist.dev_get();
         net_dev.eth_hw_addr_set(&MAC_HWADDR);
         let dev = Arc::try_new(device::Device::from_dev(pci_dev))?;
@@ -380,6 +414,7 @@ impl pci::Driver for E1000Driver {
         })?;
         regist.register(net_data)?; // ip link show
 
+        pr_info!("Intel(R) PRO/1000 Network Connection");
         Ok(Box::try_new(DrvData {
             regist,
             bar_res: bar_res.clone(),
@@ -402,7 +437,7 @@ struct RustE1000dev {
 impl kernel::Module for RustE1000dev {
     fn init(name: &'static CStr, module: &'static ThisModule) -> Result<Self> {
         pr_info!("Rust e1000 device driver (init)\n");
-        unsafe{
+        unsafe {
             bindings::a_test_say_hello(123);
         }
 
