@@ -88,7 +88,7 @@ impl E1000Driver {
                 let mut skb = dev.alloc_skb_ip_align(RXBUFFER).unwrap();
                 let head: &[u8] = skb.head_data();
                 let head = unsafe {
-                    let len = head.len();
+                    let len = pkg.len();
                     let ptr = head.as_ptr() as *mut u8;
                     &mut *slice_from_raw_parts_mut(ptr, len)
                 };
@@ -321,6 +321,23 @@ impl net::DeviceOperations for E1000Driver {
     ) -> NetdevTx {
         pr_info!("start xmit\n");
         // Exercise4 Checkpoint 2
+
+        skb.put_padto(bindings::ETH_ZLEN);
+        
+        dev.sent_queue(skb.len());
+
+        let mut dev_e1k = data.dev_e1000.lock_irqdisable();
+        let e1k_fn: &mut E1000Device<'static, Kernfn<u8>> = dev_e1k.as_mut().unwrap();
+
+        let n = e1k_fn.e1000_transmit(skb.head_data());
+        if n < 0{
+            return NetdevTx::Busy;
+        }
+
+        skb.napi_consume(64);
+        data.stats.tx_bytes.fetch_add(n as _, Ordering::Relaxed);
+        data.stats.tx_packets.fetch_add(1, Ordering::Relaxed);
+        dev.completed_queue(1, n as _);
 
         NetdevTx::Ok
     }
